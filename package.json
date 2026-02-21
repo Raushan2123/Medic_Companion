@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "echo \"Tests not configured\" && exit 0"
+    "test": "node --test tests/planner.test.js"
   },
   "keywords": [
     "medicine",

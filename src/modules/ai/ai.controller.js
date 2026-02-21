@@ -2,6 +2,16 @@
 const db = require("../../config/db");
 const { v4: uuidv4 } = require("uuid");
 
+// Import frequency guardrail planner
+const {
+  llmBuildPlan,
+  getStrengthenedSystemPrompt,
+  inferExpectedFrequency,
+  countDoses,
+  normalizeInputContract,
+  logFrequencyEvent,
+} = require("../../utils/planner");
+
 // Call AI service to generate plan
 const callAIService = async (payload) => {
   const AI_SERVICE_URL = process.env.AI_SERVICE_URL || "http://localhost:8000";
@@ -87,36 +97,70 @@ const generateMockAIResponse = (payload) => {
 // POST /ai/plan - Generate AI medication plan
 const generatePlan = async (req, res) => {
   try {
-    const { inputText, extractedText, meds } = req.body;
+    // Support both raw_text (new) and inputText/extractedText (backward compatible)
+    const { inputText, extractedText, meds, raw_text } = req.body;
     const patientId = req.user.id;
 
+    // Normalize input - use raw_text if provided, otherwise use inputText/extractedText
+    const normalizedInput = raw_text || inputText;
+
     // Validate input
-    if (!inputText && !extractedText && (!meds || meds.length === 0)) {
+    if (!normalizedInput && !extractedText && (!meds || meds.length === 0)) {
       return res.status(400).json({
-        error: "Either inputText, extractedText, or meds array is required",
+        error:
+          "Either inputText, extractedText, raw_text, or meds array is required",
       });
     }
 
     // Call AI service
     const aiResponse = await callAIService({
-      inputText,
+      inputText: normalizedInput,
       extractedText,
       meds,
       patientId,
     });
 
-    // Create plan record in database
+    // =========================================================================
+    // FREQUENCY GUARDRAILS: Validate schedule against input frequency
+    // =========================================================================
+
+    // Combine all input for frequency inference
+    const combinedInput = {
+      raw_text: raw_text,
+      inputText: normalizedInput,
+      extractedText,
+      meds,
+    };
+
+    // Apply frequency guardrails to AI response
+    const safePlan = await llmBuildPlan({
+      input: combinedInput,
+      llmSchedule: aiResponse.suggestedSchedules,
+      useMockData: false, // Already have AI response
+    });
+
+    // Log frequency validation results
+    logFrequencyEvent("Plan Generated", {
+      detectedFrequency: safePlan.validated
+        ? inferExpectedFrequency(normalizedInput + " " + (extractedText || ""))
+        : null,
+      reminderCount: safePlan.suggestedSchedules?.length || 0,
+      needsInfo: safePlan.needsInfo,
+      hasMismatches: safePlan.frequencyMismatches?.length > 0,
+    });
+
+    // Create plan record in database (include validation info in ai_output)
     const planResult = await db.query(
       `INSERT INTO ai_plans (patient_id, input_text, extracted_text, ai_output, status)
        VALUES ($1, $2, $3, $4, 'pending_approval')
        RETURNING id, status, created_at`,
-      [patientId, inputText, extractedText, JSON.stringify(aiResponse)],
+      [patientId, normalizedInput, extractedText, JSON.stringify(safePlan)],
     );
 
     const plan = planResult.rows[0];
 
-    // Insert AI plan items
-    for (const item of aiResponse.suggestedSchedules || []) {
+    // Insert AI plan items (use validated schedule)
+    for (const item of safePlan.suggestedSchedules || []) {
       await db.query(
         `INSERT INTO ai_plan_items (plan_id, medication_name, dosage, frequency, schedule_times, instructions)
          VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -131,8 +175,13 @@ const generatePlan = async (req, res) => {
       );
     }
 
-    // Insert warnings if any
-    for (const warning of aiResponse.warnings || []) {
+    // Insert warnings (including frequency mismatch warnings)
+    const allWarnings = [
+      ...(aiResponse.warnings || []),
+      ...(safePlan.warnings || []),
+    ];
+
+    for (const warning of allWarnings) {
       await db.query(
         `INSERT INTO ai_warnings (plan_id, patient_id, conflict_description, severity)
          VALUES ($1, $2, $3, $4)`,
@@ -146,19 +195,42 @@ const generatePlan = async (req, res) => {
        VALUES ($1, 'plan_generated', $2, $3)`,
       [
         patientId,
-        JSON.stringify({ inputText, extractedText, meds }),
-        JSON.stringify(aiResponse),
+        JSON.stringify({ inputText: normalizedInput, extractedText, meds }),
+        JSON.stringify(safePlan),
       ],
     );
 
-    res.status(201).json({
+    // Build response - include clarification questions if frequency mismatch detected
+    const response = {
       planId: plan.id,
       status: plan.status,
-      suggestedSchedules: aiResponse.suggestedSchedules,
-      warnings: aiResponse.warnings,
+      suggestedSchedules: safePlan.suggestedSchedules,
+      warnings: safePlan.warnings,
       confidence: aiResponse.confidence,
-      message: "AI plan generated. Review and approve to apply.",
-    });
+      message: safePlan.needsInfo
+        ? "AI plan generated but requires clarification on frequency."
+        : "AI plan generated. Review and approve to apply.",
+    };
+
+    // Add clarification questions if frequency mismatch detected
+    if (
+      safePlan.clarificationQuestions &&
+      safePlan.clarificationQuestions.length > 0
+    ) {
+      response.needsInfo = true;
+      response.clarificationQuestions = safePlan.clarificationQuestions;
+    }
+
+    // If there are frequency mismatches, set needs_info flag
+    if (
+      safePlan.frequencyMismatches &&
+      safePlan.frequencyMismatches.length > 0
+    ) {
+      response.needsInfo = true;
+      response.frequencyMismatches = safePlan.frequencyMismatches;
+    }
+
+    res.status(201).json(response);
   } catch (error) {
     console.error("Generate plan error:", error);
     res.status(500).json({ error: "Failed to generate AI plan" });

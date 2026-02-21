@@ -1,6 +1,13 @@
 // src/modules/adherence/adherence.controller.js - Adherence tracking controller
 const db = require("../../config/db");
 
+// Import adherence intelligence
+const {
+  computeAdherenceMetrics,
+  classifyAdherenceRisk,
+  generateNudgeFlags,
+} = require("./adherence.intelligence");
+
 // POST /adherence/mark - Mark dose as taken/missed/snoozed
 const markDose = async (req, res) => {
   try {
@@ -135,6 +142,20 @@ const getAdherenceSummary = async (req, res) => {
         startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     }
 
+    // Convert period to windowDays for intelligence
+    let windowDays = 7;
+    switch (period) {
+      case "24h":
+        windowDays = 1;
+        break;
+      case "7d":
+        windowDays = 7;
+        break;
+      case "30d":
+        windowDays = 30;
+        break;
+    }
+
     // Get adherence stats
     const statsResult = await db.query(
       `SELECT 
@@ -200,6 +221,30 @@ const getAdherenceSummary = async (req, res) => {
       [patientId],
     );
 
+    // =============================================================================
+    // TASK 2: Compute Adherence Intelligence
+    // =============================================================================
+    console.log(
+      `[AdherenceSummary] Computing intelligence for patient ${patientId}`,
+    );
+
+    const metrics = await computeAdherenceMetrics({
+      userId: patientId,
+      windowDays,
+    });
+
+    const riskLevel = classifyAdherenceRisk(metrics.adherencePercentage);
+    const nudgeFlags = generateNudgeFlags({
+      adherencePercentage: metrics.adherencePercentage,
+      missedStreak: metrics.missedStreak,
+      lastMissedAt: metrics.lastMissedAt,
+    });
+
+    console.log(
+      `[AdherenceSummary] Risk: ${riskLevel}, Adherence: ${metrics.adherencePercentage}%`,
+    );
+
+    // Build response (DO NOT BREAK OLD FIELDS - extend only)
     res.json({
       summary: {
         period,
@@ -211,6 +256,13 @@ const getAdherenceSummary = async (req, res) => {
         pendingDoses: parseInt(stats.pending_doses) || 0,
         adherenceRate,
       },
+      // NEW: Intelligence fields (extended)
+      adherencePercentage: metrics.adherencePercentage,
+      riskLevel: riskLevel,
+      missedStreak: metrics.missedStreak,
+      lastMissedAt: metrics.lastMissedAt,
+      lastTakenAt: metrics.lastTakenAt,
+      nudgeFlags: nudgeFlags,
       weeklyTrend: trendResult.rows.map((day) => ({
         date: day.date,
         total: parseInt(day.total),

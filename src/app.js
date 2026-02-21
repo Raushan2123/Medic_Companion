@@ -6,6 +6,7 @@ const cors = require("cors");
 const authRoutes = require("./modules/auth/auth.routes");
 const aiRoutes = require("./modules/ai/ai.routes");
 const adherenceRoutes = require("./modules/adherence/adherence.routes");
+const expertRoutes = require("./modules/expert/expert.routes");
 const healthRoutes = require("./modules/health/health.routes");
 
 const app = express();
@@ -20,6 +21,7 @@ app.use("/api", healthRoutes); // Health check (no auth)
 app.use("/api", authRoutes); // Auth routes
 app.use("/api", aiRoutes); // AI planning routes
 app.use("/api", adherenceRoutes); // Adherence routes
+app.use("/api", expertRoutes); // Expert visibility routes
 
 // 404 handler
 app.use((req, res) => {
