@@ -177,13 +177,27 @@ def hf_chat_json(
         # optional: force valid JSON object when you don't have a schema
         response_format = {"type": "json_object"}
 
-    out = client.chat_completion(
-        model=model,
-        messages=messages,
-        temperature=temperature if temperature is not None else HF_TEMPERATURE,
-        max_tokens=max_tokens if max_tokens is not None else HF_MAX_TOKENS,
-        response_format=response_format,
-    )
+    try:
+        out = client.chat_completion(
+            model=model,
+            messages=messages,
+            temperature=temperature if temperature is not None else HF_TEMPERATURE,
+            max_tokens=max_tokens if max_tokens is not None else HF_MAX_TOKENS,
+            response_format=response_format,
+        )
+    except Exception as e:
+        msg = str(e)
+        # ✅ fallback: schema -> json_object if provider can't compile grammar
+        if schema and ("failed to compile grammar" in msg or "grammar is not valid" in msg or "422" in msg):
+            out = client.chat_completion(
+                model=model,
+                messages=messages,
+                temperature=temperature if temperature is not None else HF_TEMPERATURE,
+                max_tokens=max_tokens if max_tokens is not None else HF_MAX_TOKENS,
+                response_format={"type": "json_object"},
+            )
+        else:
+            raise
 
     content = out.choices[0].message.content or ""
     return _safe_json_parse(content)

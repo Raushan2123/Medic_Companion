@@ -10,6 +10,9 @@ from app.schemas.models import (
     QueryRequest, QueryResponse,
     Dose, ToolResult, Medication
 )
+from app.schemas.models import PlanTextRequest
+from app.services.llm.extraction import llm_extract_meds
+from app.core.llm_config import USE_LLM_EXTRACTION
 from fastapi import Depends
 from app.services.security import verify_internal_service
 from pydantic import BaseModel
@@ -48,6 +51,49 @@ def _pending_interrupt_type(snap):
         return None
     payload = interrupts[-1].value
     return payload.get("type") if isinstance(payload, dict) else None
+
+@router.post("/plan_text", response_model=PlanResponse)
+def ai_plan_text(req: PlanTextRequest):
+    # 1) Convert plain text -> meds[]
+    meds = []
+    if USE_LLM_EXTRACTION and req.free_text.strip():
+        meds = llm_extract_meds(req.free_text)
+
+    # 2) Reuse the same graph invoke as /ai/plan
+    #    (Important: pass meds directly so extract_node can skip)
+    import uuid
+    plan_id = "plan_" + uuid.uuid4().hex
+
+    initial_state = {
+        "plan_id": plan_id,
+        "patient_id": req.patient_id,
+        "actor_role": req.actor_role,
+        "timezone": req.timezone,
+        "input_text": req.free_text,      # keep original text for context
+        "extracted_text": "",             # not OCR
+        "meds": meds or None,
+        "audit": [],
+    }
+
+    result = med_graph.invoke(initial_state, config=_config(plan_id))
+
+    plan = result.get("plan")
+    if not plan:
+        raise HTTPException(status_code=500, detail="Plan missing from graph state.")
+
+    # next_step: rely on state/interrupt
+    next_step = result.get("next_step") or ("NEED_INFO" if result.get("needs_info") else "NEED_APPROVAL")
+
+    return PlanResponse(
+        plan_id=plan["plan_id"],
+        status=plan["status"],
+        schedule=[Dose(**d) for d in plan.get("schedule", [])],
+        precautions=plan.get("precautions", []),
+        why=plan.get("why", []),
+        actions=plan.get("actions", []),
+        next_step=next_step,
+        questions=result.get("questions", []) or [],
+    )
 
 @router.post("/plan", response_model=PlanResponse)
 def ai_plan(req: PlanRequest):
@@ -230,3 +276,4 @@ def debug_hf():
         "HF_MODEL_EXTRACT": os.getenv("HF_MODEL_EXTRACT"),
         "USE_LLM_PLANNING": os.getenv("USE_LLM_PLANNING"),
     }
+

@@ -53,6 +53,14 @@ class PlanRequest(BaseModel):
     extracted_text: Optional[str] = None  # OCR output (if available)
     meds: Optional[List[Medication]] = None  # structured meds (preferred)
 
+class PlanTextRequest(BaseModel):
+    patient_id: str
+    actor_role: ActorRole = "CAREGIVER"   # caregiver likely
+    timezone: str = "Asia/Kolkata"
+    free_text: str                        # caregiver typed text
+    # optional: if you want to pass start date later
+    # start_date: Optional[str] = None
+
 class PlanResponse(BaseModel):
     plan_id: str
     status: PlanStatus

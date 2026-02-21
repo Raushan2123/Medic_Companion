@@ -10,8 +10,8 @@ from app.services.llm.extraction_schema import MEDS_SCHEMA
 from app.services.llm.extraction_prompt import EXTRACT_SYSTEM_PROMPT
 from app.services.llm.extraction_sanitize import sanitize_extracted_meds
 
-def llm_extract_meds(ocr_text: str):
-    user = f"OCR_TEXT:\n{ocr_text}\n\nExtract meds from OCR text."
+def llm_extract_meds(text: str) -> List[Dict[str, Any]]:
+    user = f"TEXT:\n{text}\n\nExtract meds from the text."
     raw = hf_chat_json(
         model=HF_MODEL_EXTRACT,
         system=EXTRACT_SYSTEM_PROMPT,
