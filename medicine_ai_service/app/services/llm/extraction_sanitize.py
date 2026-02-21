@@ -43,6 +43,17 @@ def normalize_frequency(freq_raw: str) -> str:
 
     return "UNKNOWN"
 
+def normalize_duration_days(v) -> int | None:
+    try:
+        if v is None:
+            return None
+        d = int(v)
+        if 1 <= d <= 365:
+            return d
+        return None
+    except Exception:
+        return None
+
 def sanitize_extracted_meds(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
     meds = raw.get("meds", []) or []
     cleaned: List[Dict[str, Any]] = []
@@ -60,6 +71,7 @@ def sanitize_extracted_meds(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
             "frequency": freq,
             "with_food": bool(m.get("with_food", False)),
             "instructions": (m.get("instructions") or "").strip(),
+            "duration_days": normalize_duration_days(m.get("duration_days")),
         })
 
     # de-duplicate by (name, strength, frequency)

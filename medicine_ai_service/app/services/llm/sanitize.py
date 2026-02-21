@@ -134,6 +134,9 @@ def sanitize_plan_output(raw: Dict[str, Any], meds: List[Dict[str, Any]]) -> Dic
         n = _every_n_days((m.get("frequency") or ""))
         if n:
             dose["repeat_every_days"] = n
+        dur = m.get("duration_days")
+        if isinstance(dur, int) and dur > 0:
+            dose["duration_days"] = dur
         cleaned_sched.append(dose)
 
     # enforce counts per medicine
@@ -172,6 +175,9 @@ def sanitize_plan_output(raw: Dict[str, Any], meds: List[Dict[str, Any]]) -> Dic
             }
             if n:
                 dose["repeat_every_days"] = n
+            dur = m.get("duration_days")
+            if isinstance(dur, int) and dur > 0:
+                dose["duration_days"] = dur
             final_sched.append(dose)
 
     final_sched = resolve_time_conflicts(final_sched, step_minutes=10)

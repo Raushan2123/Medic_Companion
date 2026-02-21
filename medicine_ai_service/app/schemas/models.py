@@ -17,9 +17,17 @@ NextStep = Literal["NEED_INFO", "NEED_APPROVAL", "DONE"]
 class Medication(BaseModel):
     name: str
     strength: Optional[str] = None
-    frequency: str = Field(..., description="OD, BID, TID, QID, WEEKLY, PRN")
+    frequency: str = Field(..., description="OD, BID, TID, QID, WEEKLY, PRN, UNKNOWN, EVERY_N_DAYS")
     with_food: Optional[bool] = None
     instructions: Optional[str] = None
+
+    # ✅ NEW
+    duration_days: Optional[int] = Field(
+        default=None,
+        description="How long to continue this medicine. Null means ongoing/unknown.",
+        ge=1,
+        le=365,
+    )
 
 class Dose(BaseModel):
     dose_id: str
@@ -27,6 +35,10 @@ class Dose(BaseModel):
     time_local: str  # "HH:MM"
     bucket: Bucket
     notes: str = ""
+
+    # ✅ NEW: recurrence + duration metadata
+    repeat_every_days: Optional[int] = None
+    duration_days: Optional[int] = None
 
 class ActionProposal(BaseModel):
     type: ActionType
