@@ -10,6 +10,8 @@ from app.schemas.models import (
     QueryRequest, QueryResponse,
     Dose, ToolResult, Medication
 )
+from fastapi import Depends
+from app.services.security import verify_internal_service
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 
@@ -149,26 +151,22 @@ def ai_continue(req: ContinueRequest):
     )
 
 @router.post("/approve", response_model=ApproveResponse)
-def ai_approve(req: ApproveRequest):
-    # ✅ caregiver only
-    if req.actor_role != "CAREGIVER":
-        raise HTTPException(status_code=403, detail="Only CAREGIVER can approve plans.")
-
-    # ✅ mock biometric proof
-    if not req.auth_proof:
-        raise HTTPException(status_code=401, detail="Biometric proof required (auth_proof missing).")
-
-    expected = os.getenv("CAREGIVER_APPROVAL_SECRET", "demo_biometric_ok")
-    if req.auth_proof != expected:
-        raise HTTPException(status_code=401, detail="Invalid biometric proof.")
+def ai_approve(
+    req: ApproveRequest,
+    _ = Depends(verify_internal_service)
+):
 
     if not req.approved_action_types:
-        raise HTTPException(status_code=400, detail="Select at least one action to approve.")
+        raise HTTPException(
+            status_code=400,
+            detail="Select at least one action to approve."
+        )
 
     plan_id = req.plan_id
 
     snap, state, plan = _current_plan_response(plan_id)
     itype = _pending_interrupt_type(snap)
+
     if itype != "APPROVAL_REQUIRED":
         raise HTTPException(
             status_code=409,
@@ -176,12 +174,15 @@ def ai_approve(req: ApproveRequest):
         )
 
     resume_payload = {
-        "actor_role": req.actor_role,
+        "actor_role": "CAREGIVER",  # trusted backend
         "approved_action_types": req.approved_action_types,
         "edits": (req.edits.model_dump() if req.edits else {}),
     }
 
-    final_state = med_graph.invoke(Command(resume=resume_payload), config=_config(plan_id))
+    final_state = med_graph.invoke(
+        Command(resume=resume_payload),
+        config=_config(plan_id)
+    )
 
     plan = final_state.get("plan")
     if not plan:
@@ -202,6 +203,7 @@ def ai_approve(req: ApproveRequest):
     )
 
     return ApproveResponse(plan=plan_resp, executed=executed)
+
 @router.get("/audit")
 def ai_audit(plan_id: str):
     snap = med_graph.get_state(_config(plan_id))  # persistence via thread_id :contentReference[oaicite:7]{index=7}
