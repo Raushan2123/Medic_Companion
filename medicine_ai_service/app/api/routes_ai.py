@@ -1,4 +1,6 @@
+# app/api/routes_ai.py
 import uuid
+import os
 from fastapi import APIRouter, HTTPException
 from langgraph.types import Command
 from app.agent.graph import med_graph
@@ -6,14 +8,44 @@ from app.schemas.models import (
     PlanRequest, PlanResponse,
     ApproveRequest, ApproveResponse,
     QueryRequest, QueryResponse,
-    Dose, ToolResult
+    Dose, ToolResult, Medication
 )
+from pydantic import BaseModel
+from typing import List, Optional, Dict, Any
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
 def _config(plan_id: str):
-    # plan_id IS the thread_id
     return {"configurable": {"thread_id": plan_id}}
+
+def _current_plan_response(plan_id: str):
+    snap = med_graph.get_state(_config(plan_id))
+    state = snap.values or {}
+    plan = state.get("plan") or {}
+    return snap, state, plan
+
+class ContinueRequest(BaseModel):
+    plan_id: str
+    actor_role: str = "PATIENT"
+    meds: Optional[List[Medication]] = None
+    extracted_text: Optional[str] = None
+
+def _interrupt_type(state: Dict[str, Any]) -> str | None:
+    ints = state.get("__interrupt__")
+    if not ints:
+        return None
+    # LangGraph stores interrupt payloads in __interrupt__ (list). :contentReference[oaicite:6]{index=6}
+    try:
+        return ints[0].value.get("type")  # common shape
+    except Exception:
+        return None
+
+def _pending_interrupt_type(snap):
+    interrupts = getattr(snap, "interrupts", None) or ()
+    if not interrupts:
+        return None
+    payload = interrupts[-1].value
+    return payload.get("type") if isinstance(payload, dict) else None
 
 @router.post("/plan", response_model=PlanResponse)
 def ai_plan(req: PlanRequest):
@@ -27,19 +59,17 @@ def ai_plan(req: PlanRequest):
         "input_text": req.input_text or "",
         "extracted_text": req.extracted_text or "",
         "meds": [m.model_dump() for m in (req.meds or [])] or None,
+        "audit": [],
     }
 
     result = med_graph.invoke(initial_state, config=_config(plan_id))
 
-    # When interrupt happens, you’ll see __interrupt__ in result :contentReference[oaicite:3]{index=3}
-    if "__interrupt__" not in result:
-        # Should not happen in our graph (approval node always interrupts),
-        # but keep a safe fallback.
-        raise HTTPException(status_code=500, detail="Expected interrupt but graph did not pause.")
-
     plan = result.get("plan")
     if not plan:
         raise HTTPException(status_code=500, detail="Plan missing from graph state.")
+
+    itype = _interrupt_type(result)
+    next_step = "NEED_INFO" if itype == "NEED_INFO" else "NEED_APPROVAL"
 
     return PlanResponse(
         plan_id=plan["plan_id"],
@@ -48,11 +78,102 @@ def ai_plan(req: PlanRequest):
         precautions=plan.get("precautions", []),
         why=plan.get("why", []),
         actions=plan.get("actions", []),
+        next_step=next_step,
+        questions=result.get("questions", []),
+    )
+
+@router.post("/continue", response_model=PlanResponse)
+def ai_continue(req: ContinueRequest):
+    snap, state, plan = _current_plan_response(req.plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="plan_id not found")
+
+    itype = _pending_interrupt_type(snap)
+
+    # ✅ If waiting for approval, do NOT resume here
+    if itype == "APPROVAL_REQUIRED":
+        return PlanResponse(
+            plan_id=plan["plan_id"],
+            status=plan["status"],
+            schedule=[Dose(**d) for d in plan.get("schedule", [])],
+            precautions=plan.get("precautions", []),
+            why=plan.get("why", []),
+            actions=plan.get("actions", []),
+            next_step="NEED_APPROVAL",
+            questions=state.get("questions", []),
+        )
+
+    # ✅ Only resume if waiting for NEED_INFO
+    if itype != "NEED_INFO":
+        # Graph is not paused (maybe DONE) or unknown
+        done_step = "DONE" if plan.get("status") == "APPROVED" else None
+        return PlanResponse(
+            plan_id=plan["plan_id"],
+            status=plan["status"],
+            schedule=[Dose(**d) for d in plan.get("schedule", [])],
+            precautions=plan.get("precautions", []),
+            why=plan.get("why", []),
+            actions=plan.get("actions", []),
+            next_step=done_step,
+            questions=state.get("questions", []),
+        )
+
+    # ✅ Require actual new info
+    if not req.meds and not req.extracted_text:
+        raise HTTPException(status_code=400, detail="Provide meds[] or extracted_text to continue.")
+
+    resume_payload = {"actor_role": req.actor_role}
+    if req.meds:
+        resume_payload["meds"] = [m.model_dump() for m in req.meds]
+    if req.extracted_text:
+        resume_payload["extracted_text"] = req.extracted_text
+
+    result = med_graph.invoke(Command(resume=resume_payload), config=_config(req.plan_id))
+
+    plan2 = result.get("plan") or {}
+    if not plan2:
+        raise HTTPException(status_code=500, detail="Plan missing after continue resume.")
+
+    # After resuming NEED_INFO, the next interrupt should be APPROVAL_REQUIRED
+    next_step = "NEED_APPROVAL" if "__interrupt__" in result else None
+
+    return PlanResponse(
+        plan_id=plan2["plan_id"],
+        status=plan2["status"],
+        schedule=[Dose(**d) for d in plan2.get("schedule", [])],
+        precautions=plan2.get("precautions", []),
+        why=plan2.get("why", []),
+        actions=plan2.get("actions", []),
+        next_step=next_step,
+        questions=result.get("questions", []),
     )
 
 @router.post("/approve", response_model=ApproveResponse)
 def ai_approve(req: ApproveRequest):
+    # ✅ caregiver only
+    if req.actor_role != "CAREGIVER":
+        raise HTTPException(status_code=403, detail="Only CAREGIVER can approve plans.")
+
+    # ✅ mock biometric proof
+    if not req.auth_proof:
+        raise HTTPException(status_code=401, detail="Biometric proof required (auth_proof missing).")
+
+    expected = os.getenv("CAREGIVER_APPROVAL_SECRET", "demo_biometric_ok")
+    if req.auth_proof != expected:
+        raise HTTPException(status_code=401, detail="Invalid biometric proof.")
+
+    if not req.approved_action_types:
+        raise HTTPException(status_code=400, detail="Select at least one action to approve.")
+
     plan_id = req.plan_id
+
+    snap, state, plan = _current_plan_response(plan_id)
+    itype = _pending_interrupt_type(snap)
+    if itype != "APPROVAL_REQUIRED":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Plan not waiting for approval. interrupt_type={itype}"
+        )
 
     resume_payload = {
         "actor_role": req.actor_role,
@@ -64,7 +185,7 @@ def ai_approve(req: ApproveRequest):
 
     plan = final_state.get("plan")
     if not plan:
-        raise HTTPException(status_code=500, detail="Plan missing after resume.")
+        raise HTTPException(status_code=500, detail="Plan missing after approve.")
 
     executed_raw = final_state.get("executed", {}) or {}
     executed = {k: ToolResult(**v) for k, v in executed_raw.items()}
@@ -76,31 +197,32 @@ def ai_approve(req: ApproveRequest):
         precautions=plan.get("precautions", []),
         why=plan.get("why", []),
         actions=plan.get("actions", []),
+        next_step="DONE",
+        questions=[],
     )
 
     return ApproveResponse(plan=plan_resp, executed=executed)
+@router.get("/audit")
+def ai_audit(plan_id: str):
+    snap = med_graph.get_state(_config(plan_id))  # persistence via thread_id :contentReference[oaicite:7]{index=7}
+    return {"plan_id": plan_id, "audit": (snap.values or {}).get("audit", [])}
 
-@router.post("/query", response_model=QueryResponse)
-def ai_query(req: QueryRequest):
-    # Simple “state-aware” Q&A without an LLM (hackathon-safe).
-    snap = med_graph.get_state(_config(req.plan_id))  # :contentReference[oaicite:4]{index=4}
-    state = snap.values or {}
-    plan = state.get("plan") or {}
-    q = req.question.lower().strip()
+@router.get("/debug_state")
+def debug_state(plan_id: str):
+    snap = med_graph.get_state(_config(plan_id))
+    return {
+        "interrupt_type": _pending_interrupt_type(snap),
+        "state_keys": list((snap.values or {}).keys()),
+        "plan_status": ((snap.values or {}).get("plan") or {}).get("status"),
+    }
 
-    if "schedule" in q or "time" in q:
-        items = plan.get("schedule", [])
-        if not items:
-            return QueryResponse(answer="No schedule is set yet. Please add medicines with frequency.")
-        lines = [f"- {d['med_name']} at {d['time_local']} ({d['bucket']})" for d in items]
-        return QueryResponse(answer="Here is your current schedule:\n" + "\n".join(lines))
-
-    if "precaution" in q or "safety" in q:
-        prec = plan.get("precautions", [])
-        return QueryResponse(answer="Safety reminders:\n" + "\n".join([f"- {p}" for p in prec]))
-
-    if "why" in q or "reason" in q:
-        why = plan.get("why", [])
-        return QueryResponse(answer="Why this plan:\n" + "\n".join([f"- {w}" for w in why]))
-
-    return QueryResponse(answer="Ask: 'show schedule', 'show precautions', or 'why this plan?'.")
+# in any router
+import os
+@router.get("/debug_env")
+def debug_env():
+    return {
+        "OLLAMA_BASE_URL": os.getenv("OLLAMA_BASE_URL"),
+        "OLLAMA_MODEL": os.getenv("OLLAMA_MODEL"),
+        "USE_LLM_EXTRACTION": os.getenv("USE_LLM_EXTRACTION"),
+        "USE_LLM_PLANNING": os.getenv("USE_LLM_PLANNING"),
+    }

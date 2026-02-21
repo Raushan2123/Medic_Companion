@@ -12,6 +12,8 @@ SAFETY_NOTE = (
     "Always confirm instructions with a doctor/pharmacist."
 )
 
+NextStep = Literal["NEED_INFO", "NEED_APPROVAL", "DONE"]
+
 class Medication(BaseModel):
     name: str
     strength: Optional[str] = None
@@ -48,6 +50,10 @@ class PlanResponse(BaseModel):
     actions: List[ActionProposal]
     safety_note: str = SAFETY_NOTE
 
+    # ✅ new
+    next_step: Optional[NextStep] = None
+    questions: List[str] = []
+
 class ApproveEdits(BaseModel):
     dose_time_overrides: Dict[str, str] = Field(default_factory=dict)  # dose_id -> "HH:MM"
 
@@ -56,6 +62,7 @@ class ApproveRequest(BaseModel):
     actor_role: ActorRole = "PATIENT"
     approved_action_types: List[ActionType] = Field(default_factory=list)
     edits: Optional[ApproveEdits] = None
+    auth_proof: Optional[str] = None
 
 class ToolResult(BaseModel):
     ok: bool

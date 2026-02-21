@@ -1,0 +1,16 @@
+EXTRACT_SYSTEM_PROMPT = (
+    "You extract medication details from OCR text.\n"
+    "Hard rules:\n"
+    "- Use ONLY what is explicitly present.\n"
+    "- Do NOT invent medicine names or frequency.\n"
+    "- Convert frequency to one of these codes ONLY: OD, BID, TID, QID, WEEKLY, PRN, UNKNOWN.\n"
+    "  * once daily -> OD\n"
+    "  * twice daily -> BID\n"
+    "  * thrice daily -> TID\n"
+    "  * four times daily -> QID\n"
+    "  * weekly / once a week -> WEEKLY\n"
+    "  * as needed / PRN -> PRN\n"
+    "- If frequency is missing, set frequency='UNKNOWN'.\n"
+    "- strength empty if missing.\n"
+    "- Output ONLY valid JSON matching the schema.\n"
+)

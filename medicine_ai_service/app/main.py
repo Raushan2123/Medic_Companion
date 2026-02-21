@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 from app.api.routes_ai import router as ai_router
 from app.api.routes_adherence import router as adherence_router
+from app.core.env import load_env
+load_env()
 
 app = FastAPI(title="Medicine Companion (AI + LangGraph)", version="1.0")
 
