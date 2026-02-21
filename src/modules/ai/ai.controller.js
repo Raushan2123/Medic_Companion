@@ -25,22 +25,54 @@ const callAIService = async (payload) => {
   }
 };
 
+// Helper function to parse medication names from text - simplified
+const parseMedicationsFromText = (text) => {
+  if (!text) return ["Medicine"];
+
+  // Split by comma, semicolon, or "and"
+  const parts = text
+    .split(/[,;]+/)
+    .map((p) => p.trim())
+    .filter((p) => p);
+
+  // For each part, try to extract the first word as medication name
+  const medications = [];
+  for (const part of parts) {
+    // Remove common verbs and get first word
+    const cleaned = part.replace(/^(take|have|use|prescribed)\s+/i, "").trim();
+
+    // Get the first word (medication name)
+    const firstWord = cleaned.split(/\s+/)[0];
+
+    // Clean up - remove any trailing punctuation
+    const medName = firstWord.replace(/[^a-zA-Z]/g, "");
+
+    if (medName.length > 1) {
+      medications.push(medName);
+    }
+  }
+
+  return medications.length > 0 ? medications : ["Medicine"];
+};
+
 // Generate mock AI response for demo when service unavailable
 const generateMockAIResponse = (payload) => {
   const { inputText, meds } = payload;
 
   // Parse medications from input or use provided meds
-  const medications = inputText
-    ? inputText
-        .split(/[,;]/)
-        .map((m) => m.trim())
-        .filter((m) => m)
-    : meds?.map((m) => m.name) || ["Medicine"];
+  let medications;
+  if (inputText) {
+    medications = parseMedicationsFromText(inputText);
+  } else if (meds && meds.length > 0) {
+    medications = meds.map((m) => m.name);
+  } else {
+    medications = ["Medicine"];
+  }
 
   const scheduleTimes = ["08:00", "12:00", "18:00", "22:00"];
 
   return {
-    suggestedSchedules: medications.map((med, idx) => ({
+    suggestedSchedules: medications.map((med) => ({
       medicationName: med,
       dosage: "1 tablet",
       frequency: "4 times daily",
@@ -391,12 +423,3 @@ module.exports = {
   getAuditLogs,
   debugState,
 };
-
-// ============================================================
-// GIT INSTRUCTIONS AFTER COMPLETING AI MODULE:
-// ============================================================
-// git checkout -b feature/ai-planning
-// git add src/modules/ai/
-// git commit -m "feat: Add AI planning endpoints (/ai/plan, /ai/continue, /ai/approve, /ai/audit)"
-// git push -u origin feature/ai-planning
-// ============================================================

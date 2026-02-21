@@ -34,9 +34,10 @@ try {
     Write-Host "✅ Logged in with existing user" -ForegroundColor Green
 }
 
-Write-Host "`n=== Testing AI Plan ===" -ForegroundColor Cyan
+Write-Host "`n=== Testing AI Plan (comma-separated) ===" -ForegroundColor Cyan
+# Use comma-separated format for better parsing
 $aiBody = @{
-    inputText = "Take Aspirin 100mg once daily in the morning"
+    inputText = "Aspirin, Metformin, Vitamin D"
 } | ConvertTo-Json
 
 $aiPlan = Invoke-RestMethod -Uri "$baseUrl/ai/plan" -Method Post -Body $aiBody -ContentType "application/json" -Headers @{"Authorization"="Bearer $token"}
