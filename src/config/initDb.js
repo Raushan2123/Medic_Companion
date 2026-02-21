@@ -4,7 +4,7 @@ const db = require("./db");
 const initDb = async () => {
   try {
     // First, check if we need to migrate the users table
-    const tableCheck = await db.query(`
+    const userColumns = await db.query(`
       SELECT column_name 
       FROM information_schema.columns 
       WHERE table_name = 'users' 
@@ -12,10 +12,9 @@ const initDb = async () => {
     `);
 
     // If email column doesn't exist, we need to migrate
-    if (tableCheck.rows.length === 0) {
+    if (userColumns.rows.length === 0) {
       console.log("🔄 Migrating users table...");
 
-      // Add missing columns to existing users table
       await db.query(`
         ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(255) UNIQUE;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255);
@@ -28,6 +27,124 @@ const initDb = async () => {
       console.log("✅ Users table migrated");
     }
 
+    // Check and migrate ai_audit_logs
+    const auditColumns = await db.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = 'ai_audit_logs'
+    `);
+
+    const auditCols = auditColumns.rows.map((r) => r.column_name);
+
+    if (!auditCols.includes("action")) {
+      await db.query(
+        `ALTER TABLE ai_audit_logs ADD COLUMN IF NOT EXISTS action VARCHAR(100)`,
+      );
+      console.log("✅ ai_audit_logs - added action");
+    }
+    if (!auditCols.includes("input_data")) {
+      await db.query(
+        `ALTER TABLE ai_audit_logs ADD COLUMN IF NOT EXISTS input_data JSONB`,
+      );
+      console.log("✅ ai_audit_logs - added input_data");
+    }
+    if (!auditCols.includes("output_data")) {
+      await db.query(
+        `ALTER TABLE ai_audit_logs ADD COLUMN IF NOT EXISTS output_data JSONB`,
+      );
+      console.log("✅ ai_audit_logs - added output_data");
+    }
+    if (!auditCols.includes("approved")) {
+      await db.query(
+        `ALTER TABLE ai_audit_logs ADD COLUMN IF NOT EXISTS approved BOOLEAN DEFAULT false`,
+      );
+      console.log("✅ ai_audit_logs - added approved");
+    }
+
+    // Check and migrate dose_logs
+    const doseColumns = await db.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = 'dose_logs'
+    `);
+
+    const doseCols = doseColumns.rows.map((r) => r.column_name);
+
+    if (!doseCols.includes("medication_id")) {
+      await db.query(
+        `ALTER TABLE dose_logs ADD COLUMN IF NOT EXISTS medication_id UUID`,
+      );
+      console.log("✅ dose_logs - added medication_id");
+    }
+    if (!doseCols.includes("action_type")) {
+      await db.query(
+        `ALTER TABLE dose_logs ADD COLUMN IF NOT EXISTS action_type VARCHAR(50)`,
+      );
+      console.log("✅ dose_logs - added action_type");
+    }
+    if (!doseCols.includes("notes")) {
+      await db.query(
+        `ALTER TABLE dose_logs ADD COLUMN IF NOT EXISTS notes TEXT`,
+      );
+      console.log("✅ dose_logs - added notes");
+    }
+
+    // Check and migrate medications
+    const medColumns = await db.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = 'medications'
+    `);
+
+    const medCols = medColumns.rows.map((r) => r.column_name);
+
+    if (!medCols.includes("is_active")) {
+      await db.query(
+        `ALTER TABLE medications ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true`,
+      );
+      console.log("✅ medications - added is_active");
+    }
+    if (!medCols.includes("dosage")) {
+      await db.query(
+        `ALTER TABLE medications ADD COLUMN IF NOT EXISTS dosage VARCHAR(100)`,
+      );
+      console.log("✅ medications - added dosage");
+    }
+    if (!medCols.includes("instructions")) {
+      await db.query(
+        `ALTER TABLE medications ADD COLUMN IF NOT EXISTS instructions TEXT`,
+      );
+      console.log("✅ medications - added instructions");
+    }
+    if (!medCols.includes("patient_id")) {
+      await db.query(
+        `ALTER TABLE medications ADD COLUMN IF NOT EXISTS patient_id UUID REFERENCES users(id)`,
+      );
+      console.log("✅ medications - added patient_id");
+    }
+
+    // Check and migrate schedules
+    const schedColumns = await db.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = 'schedules'
+    `);
+
+    const schedCols = schedColumns.rows.map((r) => r.column_name);
+
+    if (!schedCols.includes("dosage_amount")) {
+      await db.query(
+        `ALTER TABLE schedules ADD COLUMN IF NOT EXISTS dosage_amount VARCHAR(100)`,
+      );
+      console.log("✅ schedules - added dosage_amount");
+    }
+    if (!schedCols.includes("medication_id")) {
+      await db.query(
+        `ALTER TABLE schedules ADD COLUMN IF NOT EXISTS medication_id UUID REFERENCES medications(id)`,
+      );
+      console.log("✅ schedules - added medication_id");
+    }
+
     // Create new tables if they don't exist
     const newTables = [
       // Doctor-Patient relationships
@@ -37,34 +154,6 @@ const initDb = async () => {
         patient_id UUID REFERENCES users(id) ON DELETE CASCADE,
         created_at TIMESTAMPTZ DEFAULT NOW(),
         UNIQUE(doctor_id, patient_id)
-      )`,
-
-      // Medications table
-      `CREATE TABLE IF NOT EXISTS medications (
-        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-        patient_id UUID REFERENCES users(id) ON DELETE CASCADE,
-        name VARCHAR(255) NOT NULL,
-        dosage VARCHAR(100),
-        dosage_unit VARCHAR(50),
-        instructions TEXT,
-        total_inventory INT DEFAULT 0,
-        refill_threshold INT DEFAULT 7,
-        start_date DATE,
-        end_date DATE,
-        is_active BOOLEAN DEFAULT true,
-        created_at TIMESTAMPTZ DEFAULT NOW(),
-        updated_at TIMESTAMPTZ DEFAULT NOW()
-      )`,
-
-      // Schedules table
-      `CREATE TABLE IF NOT EXISTS schedules (
-        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-        medication_id UUID REFERENCES medications(id) ON DELETE CASCADE,
-        dosage_amount VARCHAR(100),
-        time_of_day TIME NOT NULL,
-        days_of_week INTEGER[] DEFAULT '{0,1,2,3,4,5,6}',
-        special_instructions TEXT,
-        created_at TIMESTAMPTZ DEFAULT NOW()
       )`,
 
       // AI Planning Sessions
@@ -100,31 +189,6 @@ const initDb = async () => {
         conflict_description TEXT NOT NULL,
         severity VARCHAR(50) NOT NULL,
         resolved BOOLEAN DEFAULT false,
-        created_at TIMESTAMPTZ DEFAULT NOW()
-      )`,
-
-      // AI Audit Logs
-      `CREATE TABLE IF NOT EXISTS ai_audit_logs (
-        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-        patient_id UUID REFERENCES users(id) ON DELETE CASCADE,
-        action VARCHAR(100) NOT NULL,
-        input_data JSONB,
-        output_data JSONB,
-        approved BOOLEAN DEFAULT false,
-        created_at TIMESTAMPTZ DEFAULT NOW()
-      )`,
-
-      // Dose Logs
-      `CREATE TABLE IF NOT EXISTS dose_logs (
-        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-        schedule_id UUID REFERENCES schedules(id) ON DELETE CASCADE,
-        medication_id UUID REFERENCES medications(id) ON DELETE CASCADE,
-        patient_id UUID REFERENCES users(id) ON DELETE CASCADE,
-        scheduled_time TIMESTAMPTZ NOT NULL,
-        action_time TIMESTAMPTZ,
-        status VARCHAR(50) NOT NULL,
-        action_type VARCHAR(50),
-        notes TEXT,
         created_at TIMESTAMPTZ DEFAULT NOW()
       )`,
 
@@ -182,7 +246,11 @@ const initDb = async () => {
     ];
 
     for (const tableSQL of newTables) {
-      await db.query(tableSQL);
+      try {
+        await db.query(tableSQL);
+      } catch (e) {
+        // Table might already exist, ignore
+      }
     }
 
     // Create indexes
@@ -200,13 +268,16 @@ const initDb = async () => {
     ];
 
     for (const indexSQL of indexes) {
-      await db.query(indexSQL);
+      try {
+        await db.query(indexSQL);
+      } catch (e) {
+        // Index might already exist, ignore
+      }
     }
 
     console.log("✅ Database schema verified/created");
   } catch (err) {
     console.error("❌ DB init failed:", err.message);
-    // Don't exit in development
     if (process.env.NODE_ENV === "production") {
       process.exit(1);
     }
