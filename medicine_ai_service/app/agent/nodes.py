@@ -48,14 +48,23 @@ def plan_node(state: AgentState) -> Dict[str, Any]:
     meds_dicts = state.get("meds") or []
     meds = [Medication(**m) for m in meds_dicts] if meds_dicts else []
 
+    # ✅ local audit accumulator (prevents overwrite)
+    audit = list(state.get("audit") or [])
+
+    def add_audit(event: str, extra: Dict[str, Any] | None = None) -> None:
+        row = {"event": event}
+        if extra:
+            row.update(extra)
+        audit.append(row)
+
     # ---------------------------
     # 1) LLM planning path (preferred)
     # ---------------------------
     if USE_LLM_PLANNING and meds_dicts:
+        add_audit("plan.llm.try", {"enabled": True, "meds_count": len(meds_dicts)})
         try:
             llm_out = llm_build_plan(meds_dicts, input_text, timezone)
 
-            # LLM output is already normalized by llm_build_plan()
             schedule_llm = llm_out.get("schedule", []) or []
             precautions = llm_out.get("precautions", []) or []
             why = llm_out.get("why", []) or []
@@ -64,35 +73,39 @@ def plan_node(state: AgentState) -> Dict[str, Any]:
             needs_info = bool(llm_out.get("needs_info", False))
             questions: List[str] = list(llm_out.get("questions", []) or [])
 
-            # extra safety: if meds exist but schedule empty -> force NEED_INFO
             if meds_dicts and len(schedule_llm) == 0:
                 needs_info = True
                 if not questions:
-                    questions.append("I couldn't create reminder times. Confirm frequency (OD/BID/TID) for each medicine.")
+                    questions.append(
+                        "I couldn't create reminder times. Confirm frequency (OD/BID/TID) for each medicine."
+                    )
 
             plan = {
                 "plan_id": plan_id,
                 "status": "PROPOSED",
-                "schedule": schedule_llm,   # already list of dicts with dose_id
+                "schedule": schedule_llm,
                 "precautions": precautions,
                 "why": why,
                 "actions": actions,
             }
 
             next_step = "NEED_INFO" if needs_info else "NEED_APPROVAL"
+            add_audit("plan.llm.done", {"needs_info": needs_info, "schedule_count": len(schedule_llm)})
 
-            out: Dict[str, Any] = {
+            return {
                 "plan": plan,
                 "needs_info": needs_info,
                 "questions": questions,
                 "next_step": next_step,
+                "audit": audit,
             }
-            out.update(_audit(state, "plan.llm.done", {"needs_info": needs_info, "schedule_count": len(schedule_llm)}))
-            return out
 
         except Exception as e:
-            # fall back to heuristic plan
-            pass
+            add_audit("plan.llm.error", {"error": str(e)})
+            # fall through to heuristic
+
+    else:
+        add_audit("plan.llm.skip", {"enabled": USE_LLM_PLANNING, "meds_count": len(meds_dicts)})
 
     # ---------------------------
     # 2) Heuristic planning fallback
@@ -124,15 +137,15 @@ def plan_node(state: AgentState) -> Dict[str, Any]:
     }
 
     next_step = "NEED_INFO" if needs_info else "NEED_APPROVAL"
+    add_audit("plan.done", {"needs_info": needs_info, "schedule_count": len(schedule)})
 
-    out: Dict[str, Any] = {
+    return {
         "plan": plan,
         "needs_info": needs_info,
         "questions": questions,
         "next_step": next_step,
+        "audit": audit,
     }
-    out.update(_audit(state, "plan.done", {"needs_info": needs_info, "schedule_count": len(schedule)}))
-    return out
 
 def route_after_plan(state: AgentState) -> str:
     # conditional edge target

@@ -4,7 +4,7 @@ pydantic==2.8.2
 langgraph>=1.0.0
 langgraph-checkpoint-sqlite==3.0.3
 streamlit
-requests
 pandas
+huggingface_hub>=0.24.0
+requests>=2.32.0
 python-dotenv==1.0.1
-

@@ -218,11 +218,13 @@ def debug_state(plan_id: str):
 
 # in any router
 import os
-@router.get("/debug_env")
-def debug_env():
+@router.get("/debug_hf")
+def debug_hf():
+    import os
     return {
-        "OLLAMA_BASE_URL": os.getenv("OLLAMA_BASE_URL"),
-        "OLLAMA_MODEL": os.getenv("OLLAMA_MODEL"),
-        "USE_LLM_EXTRACTION": os.getenv("USE_LLM_EXTRACTION"),
+        "HF_TOKEN_set": bool(os.getenv("HF_TOKEN")),
+        "HF_PROVIDER": os.getenv("HF_PROVIDER"),
+        "HF_MODEL_PLAN": os.getenv("HF_MODEL_PLAN"),
+        "HF_MODEL_EXTRACT": os.getenv("HF_MODEL_EXTRACT"),
         "USE_LLM_PLANNING": os.getenv("USE_LLM_PLANNING"),
     }
