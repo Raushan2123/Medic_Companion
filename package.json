@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node --test tests/planner.test.js"
+    "test": "node --test tests/planner.test.js",
+    "test:schedule": "node tests/schedule.resolver.test.js"
   },
   "keywords": [
     "medicine",

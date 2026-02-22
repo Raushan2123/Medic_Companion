@@ -8,6 +8,7 @@ const aiRoutes = require("./modules/ai/ai.routes");
 const adherenceRoutes = require("./modules/adherence/adherence.routes");
 const expertRoutes = require("./modules/expert/expert.routes");
 const healthRoutes = require("./modules/health/health.routes");
+const scheduleRoutes = require("./modules/schedules/schedule.routes");
 
 const app = express();
 
@@ -22,6 +23,7 @@ app.use("/api", authRoutes); // Auth routes
 app.use("/api", aiRoutes); // AI planning routes
 app.use("/api", adherenceRoutes); // Adherence routes
 app.use("/api", expertRoutes); // Expert visibility routes
+app.use("/api", scheduleRoutes); // Schedule/today endpoint
 
 // 404 handler
 app.use((req, res) => {
