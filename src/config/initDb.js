@@ -144,6 +144,12 @@ const initDb = async () => {
       );
       console.log("✅ schedules - added medication_id");
     }
+    if (!schedCols.includes("email_sent")) {
+      await db.query(
+        `ALTER TABLE schedules ADD COLUMN IF NOT EXISTS email_sent BOOLEAN DEFAULT FALSE`,
+      );
+      console.log("✅ schedules - added email_sent");
+    }
 
     // Create new tables if they don't exist
     const newTables = [

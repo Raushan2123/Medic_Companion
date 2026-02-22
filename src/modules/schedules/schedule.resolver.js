@@ -1,5 +1,9 @@
 // src/modules/schedules/schedule.resolver.js - Dose Status Resolver
 const db = require("../../config/db");
+const {
+  sendMissedDoseEmailAsync,
+  isEmailEnabled,
+} = require("../../services/email.service");
 
 // Bucket order for sorting
 const BUCKET_ORDER = {
@@ -83,6 +87,101 @@ function determineStatus(doseLog, scheduledTime, graceMinutes, now) {
 }
 
 /**
+ * Fetch user email for notifications
+ * @param {string} userId - User ID
+ * @returns {Promise<Object|null>} User data with email
+ */
+async function getUserEmail(userId) {
+  try {
+    const result = await db.query(
+      "SELECT id, email, name FROM users WHERE id = $1",
+      [userId],
+    );
+    return result.rows[0] || null;
+  } catch (error) {
+    console.error(
+      `[ScheduleResolver] Error fetching user email: ${error.message}`,
+    );
+    return null;
+  }
+}
+
+/**
+ * Mark email as sent for a schedule
+ * @param {string} scheduleId - Schedule ID
+ * @returns {Promise<boolean>}
+ */
+async function markEmailSent(scheduleId) {
+  try {
+    await db.query("UPDATE schedules SET email_sent = TRUE WHERE id = $1", [
+      scheduleId,
+    ]);
+    return true;
+  } catch (error) {
+    console.error(
+      `[ScheduleResolver] Error marking email sent: ${error.message}`,
+    );
+    return false;
+  }
+}
+
+/**
+ * Trigger missed dose email notification (non-blocking)
+ * @param {Object} params - Parameters
+ * @param {string} params.userId - User ID
+ * @param {string} params.scheduleId - Schedule ID
+ * @param {string} params.medicationName - Medication name
+ * @param {string} params.timeLocal - Scheduled time
+ */
+async function triggerMissedDoseEmail({
+  userId,
+  scheduleId,
+  medicationName,
+  timeLocal,
+}) {
+  // Check if email is enabled
+  if (!isEmailEnabled()) {
+    console.log(
+      `[EmailNudge] Email disabled, skipping notification for schedule ${scheduleId}`,
+    );
+    return;
+  }
+
+  // Fetch user email
+  const user = await getUserEmail(userId);
+  if (!user || !user.email) {
+    console.log(
+      `[EmailNudge] No user email found for user ${userId}, skipping notification`,
+    );
+    return;
+  }
+
+  console.log(
+    `[EmailNudge] Attempting to send missed dose email for schedule ${scheduleId}`,
+  );
+
+  try {
+    await sendMissedDoseEmailAsync({
+      to: user.email,
+      medicationName,
+      timeLocal,
+      userName: user.name,
+    });
+
+    // Only mark as sent if email was actually sent (no exception thrown)
+    await markEmailSent(scheduleId);
+    console.log(
+      `[EmailNudge] Successfully sent email for schedule ${scheduleId}`,
+    );
+  } catch (error) {
+    // Email failed - do NOT mark as sent, will retry on next call
+    console.error(
+      `[EmailNudge] Failed to send email for schedule ${scheduleId}: ${error.message}`,
+    );
+  }
+}
+
+/**
  * Resolve dose statuses for a given day
  * @param {Object} params - Parameters
  * @param {string} params.userId - User ID
@@ -116,6 +215,7 @@ async function resolveDoseStatuses({
         s.medication_id,
         s.time_of_day,
         s.dosage_amount,
+        s.email_sent,
         m.name as medication_name,
         m.is_active
       FROM schedules s
@@ -222,6 +322,27 @@ async function resolveDoseStatuses({
         isOverdue: doseIsOverdue,
         scheduledTimeISO: scheduledTime.toISOString(),
       });
+
+      // Email nudge logic: send email ONLY when:
+      // - status === "MISSED"
+      // - isOverdue === true
+      // - schedule.email_sent === false
+      // - EMAIL_ENABLED === true
+      if (
+        status === "MISSED" &&
+        doseIsOverdue &&
+        schedule.email_sent !== true &&
+        isEmailEnabled()
+      ) {
+        // Fire-and-forget: trigger email without awaiting
+        // This ensures we don't block the response
+        void triggerMissedDoseEmail({
+          userId,
+          scheduleId: schedule.schedule_id,
+          medicationName: schedule.medication_name,
+          timeLocal: schedule.time_of_day,
+        });
+      }
     }
 
     // 4. Sort doses by time and bucket
@@ -313,4 +434,7 @@ module.exports = {
   getBucket,
   isOverdue,
   determineStatus,
+  triggerMissedDoseEmail,
+  markEmailSent,
+  getUserEmail,
 };
