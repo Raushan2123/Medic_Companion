@@ -1,21 +1,35 @@
 {
-  "name": "elderly-med-companion",
+  "name": "medic-companion-backend",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Medicine Companion - AI-powered medication adherence system",
+  "main": "src/server.js",
   "scripts": {
-    "start": "node initDb.js && node server.js",
-    "db:init": "node initDb.js"
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test tests/planner.test.js"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "medicine",
+    "adherence",
+    "ai",
+    "health"
+  ],
+  "author": "BIT Mesra Hackathon Team",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "cors": "^2.8.6",
-    "dotenv": "^17.3.1",
-    "express": "^5.2.1",
-    "jsonwebtoken": "^9.0.3",
-    "pg": "^8.18.0"
+    "axios": "^1.7.9",
+    "bcrypt": "^5.1.1",
+    "bullmq": "^5.28.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "ioredis": "^5.4.2",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^1.4.5-lts.1",
+    "node-fetch": "^2.7.0",
+    "pg": "^8.13.1",
+    "socket.io": "^4.8.1",
+    "uuid": "^11.0.5"
   }
 }
